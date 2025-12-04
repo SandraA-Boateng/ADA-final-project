@@ -28,21 +28,45 @@ lapply(pkgs, library, character.only = TRUE)
 ```
 
 
-## Import BRFSS 2023 and create Missouri dataset (age 35+)
- 
+
+# 1. BRFSS 2023 data import
 ```{r}
+## ---- load_brfss_2023, message = TRUE, warning = FALSE ------------------
+
+# 1. BRFSS 2023 data import
+# -------------------------------------------------------------------
+# Before running this code:
+#   • Go to: https://www.cdc.gov/brfss/annual_data/annual_2023.html
+#   • Download "LLCP2023XPT.zip" (SAS Transport Format)
+#   • Unzip the file
+#   • Place the extracted file "LLCP2023.XPT" in the same folder
+#     as this R Markdown file (your working directory).
+#
+# This avoids problems with large online downloads timing out or failing during knitting.
+
+library(haven)
+library(dplyr)
+
+# 2. Read raw BRFSS 2023 XPT file
+# -------------------------------------------------------------------
 brfss23 <- haven::read_xpt("LLCP2023.XPT")
 
-## Save once as RDS for future scripts
+# 3. Save a local RDS copy (optional but helpful for future work)
+# -------------------------------------------------------------------
+# This creates a smaller, faster-to-load version of the dataset.
+# Once saved, you can load it in other scripts with:
+#   brfss23 <- readRDS("BRFSS2023.rds")
 
-saveRDS(brfss23, "BRFSS2023.rds")
 
-## Quick check: full N and some structure
+# 4. Quick checks: size and structure
+# -------------------------------------------------------------------
 dim(brfss23)
 dplyr::glimpse(brfss23, width = 80)
 
 ```
- 
+
+
+
 
 
 ## 2. Create Missouri dataset and recode variables
@@ -184,9 +208,7 @@ table(BRFSS23MO_analytic$dual_burden, useNA = "ifany")
 ##Save analytic dataset
 saveRDS(BRFSS23MO_analytic, file = "BRFSS2023_MO_analytic.rds")
 
-brfss23  <- readRDS("BRFSS2023.rds")              # full 2023 BRFSS
-brfss_mo <- readRDS("BRFSS2023_MO_clean.rds")     # MO 35+ recoded
-analytic <- readRDS("BRFSS2023_MO_analytic.rds")  # complete-case analytic dataset
+analytic <- BRFSS23MO_analytic
 
 ```
 
@@ -280,8 +302,6 @@ digraph flowchart {{
 figure1
 ```
 
-
-`
 
 
 
@@ -383,7 +403,9 @@ model_adj <- glm( dual_burden ~ bmi + age_cont + sex + smoke, data   = analytic,
 
 summary(model_adj) 
 
-#Adjusted OR and 95% CI
+# Adjusted OR and 95% CI
+odds.n.ends(model_adj)
+
 ```
 ##. Each 1 kg/m² increase in BMI was associated with about a 10% increase in the odds of having both hypertension and diabetes (adjusted OR ≈ 1.10 based on β = 0.096; 95% CI: ~1.09–1.12; p < 0.001).After adjusting for age, sex, and smoking status, the association between BMI and dual burden remained strong and slightly strengthened
 
