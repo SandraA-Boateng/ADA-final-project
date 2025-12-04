@@ -36,7 +36,7 @@ This file. Provides an overview of the project, dataset details, and instruction
 ### **Source**
 Behavioral Risk Factor Surveillance System (BRFSS), 2023  
 Centers for Disease Control and Prevention (CDC)  
-Public dataset: https://www.cdc.gov/brfss/annual_data/2023/
+Public dataset:https://www.cdc.gov/brfss/annual_data/2023/zip/codebook23_llcp-v2-508.zip
 
 ### **Study Population**
 The analytic sample includes Missouri adults aged **≥ 35 years** with complete data for:
