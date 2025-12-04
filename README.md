@@ -6,8 +6,7 @@ The goal of this work is to examine whether body mass index (BMI) is associated 
 
 The project also assesses whether this association differs by race. All data cleaning, descriptive analyses, regression models, effect-measure-modification testing, and diagnostics were completed in R (version ≥ 4.3) following reproducible research practices.
 
-**Because BRFSS data are publicly available and large, the raw dataset is not included in the repository.  
-The R Markdown file automatically downloads the 2023 BRFSS ZIP file directly from the CDC.**
+**Because BRFSS data are publicly available and large, the raw dataset is not included in the repository.**  
 
 ---
 
@@ -59,9 +58,13 @@ The analytic sample includes Missouri adults aged **≥ 35 years** with complete
 ## What the Code Does
 
 ### **1. Imports and Prepares Data**
-- Downloads the BRFSS 2023 ZIP file from the CDC  
-- Extracts the `.XPT` file and loads it into R  
-- Filters to Missouri adults aged ≥ 35  
+
+BRFSS files are large and cannot be hosted on GitHub.
+- To reproduce the analysis:
+- Download the 2023 BRFSS XPT file , Visit: https://www.cdc.gov/brfss/annual_data/annual_2023.html
+- Download LLCP2023XPT.zip and Unzip the file to LLCP2023.XPT
+- **Place the file in the same folder as the R Markdown file (your working directory)** 
+- Then the code- Filters to Missouri adults aged ≥ 35  
 - Recodes variables and creates the dual-burden outcome  
 - Produces a complete-case analytic dataset  
 
@@ -97,7 +100,8 @@ The analytic sample includes Missouri adults aged **≥ 35 years** with complete
 
 3. **Ensure your working directory is set to the project folder.** 
 
-4 **Run the acript** 
+4 **Run the script** 
+
 
 Author
 
