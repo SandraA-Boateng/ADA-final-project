@@ -1,0 +1,615 @@
+---
+title: "Association Between Body Mass Index and the Dual Burden of Hypertension and Diabetes Among Missouri Adults: Cross Sectional Study Assessing Racial and Behavioral Differences" 
+
+author: "Sandra Agyenim -Boateng"
+date: "2025-12-02"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+## Load packages used for cleaning, tables, and models
+
+```{r}
+
+pkgs <- c("haven", "readr", "dplyr", "tidyr", "ggplot2","car", "broom", "lmtest", "table1", "odds.n.ends", "DiagrammeR", "glue")
+
+
+# install any that are missing
+to_install <- setdiff(pkgs, rownames(installed.packages()))
+if (length(to_install) > 0) install.packages(to_install)
+
+# load all
+lapply(pkgs, library, character.only = TRUE)
+```
+
+
+## Import BRFSS 2023 and create Missouri dataset (age 35+)
+ 
+```{r}
+brfss23 <- haven::read_xpt("LLCP2023.XPT")
+
+## Save once as RDS for future scripts
+
+saveRDS(brfss23, "BRFSS2023.rds")
+
+## Quick check: full N and some structure
+dim(brfss23)
+dplyr::glimpse(brfss23, width = 80)
+
+```
+ 
+
+
+## 2. Create Missouri dataset and recode variables
+
+```{r}
+
+data_2023 <- brfss23   
+
+brfss_mo <- data_2023 %>%
+  
+  # 1) Inclusion criteria: Missouri only (FIPS 29)
+  
+  filter(`_STATE` == 29) %>%
+  
+  # 2) Recode key Variables 
+  
+  mutate(
+    # ---- Age ----
+    # _AGE80: imputed age, collapsed above 80; 99 = missing
+    age_cont  = na_if(`_AGE80`, 99),
+    age35plus = if_else(age_cont >= 35, 1L, 0L,
+                        missing = NA_integer_),
+    
+    # ---- BMI (kg/m^2) ----
+    # _BMI5: BMI * 100, 9999 or 0 = missing
+    bmi = if_else(`_BMI5` %in% c(0L, 9999L),
+                  NA_real_,
+                  `_BMI5` / 100),
+    
+    # Hypertension (calculated variable)
+    # _RFHYPE6:
+    #   1 = No (healthy)
+    #   2 = Yes (has hypertension)
+    #   9 = Missing/DK/Refused
+    # -------------------------
+    htn_yes = case_when(
+      `_RFHYPE6` == 2 ~ 1L,
+      `_RFHYPE6` == 1 ~ 0L,
+      TRUE ~ NA_integer_
+    ),
+    
+    
+    # -------------------------
+    # Diabetes (DIABETE4)
+    # Codes:
+    #   1 = Yes (diabetes)  --> YES
+    #   2 = Pregnancy-only  --> NO
+    #   3 = No              --> NO
+    #   4 = Prediabetes     --> NO
+    #   7/9/missing         --> NA
+    # -------------------------
+    dm_yes = case_when(
+      DIABETE4 == 1 ~ 1L,                     # diabetes
+      DIABETE4 %in% c(2,3,4) ~ 0L,            # NOT diabetes
+      TRUE ~ NA_integer_                      # unknown
+    ),
+    
+    # -------------------------
+    # Dual burden (HTN + DM)
+    # 1 = both hypertension AND diabetes
+    # 0 = none or only one (at least HTN or DM measured)
+    # NA = missing in either variable
+    # -------------------------
+    dual_burden = case_when(
+      htn_yes == 1L & dm_yes == 1L ~ 1L,
+      htn_yes %in% c(0L,1L) & dm_yes %in% c(0L,1L) ~ 0L,
+      TRUE ~ NA_integer_
+    ),
+    
+    # ---- Sex (SEXVAR) ----
+    # 1 = male, 2 = female
+    sex = case_when(
+      SEXVAR == 1 ~ "male",
+      SEXVAR == 2 ~ "female",
+      TRUE        ~ NA_character_
+    ),
+    sex = factor(sex, levels = c("male", "female")),
+    
+
+    # ---- Race: White vs Black from _IMPRACE ----
+    # (check: usually 1 = White, 2 = Black. Others -> NA for this project)
+    race2 = case_when(
+      `_IMPRACE` == 1 ~ "White",
+      `_IMPRACE` == 2 ~ "Black",
+      TRUE            ~ NA_character_
+    ),
+    race2 = factor(race2, levels = c("White", "Black")),
+    
+    # ---- Smoking: current vs non-current from _SMOKER3 ----
+    # _SMOKER3: 1 = every day, 2 = some days, 3 = former, 4 = never
+    smoke = case_when(
+      `_SMOKER3` %in% c(1, 2) ~ "current",
+      `_SMOKER3` %in% c(3, 4) ~ "non-current",
+      TRUE                    ~ NA_character_
+    ),
+    smoke = factor(smoke, levels = c("non-current", "current"))
+  ) %>%
+  # 3) Apply age inclusion AFTER recoding age
+  filter(age35plus == 1L)
+
+# Sample size and some key variables
+dim(brfss_mo)
+
+# Key categorical variables
+table(brfss_mo$sex, useNA = "ifany")
+table(brfss_mo$race2, useNA = "ifany")
+table(brfss_mo$smoke, useNA = "ifany")
+table(brfss_mo$dual_burden, useNA = "ifany")
+
+# BMI distribution
+summary(brfss_mo$bmi)
+
+
+## Access Missingness for main  variables
+
+sapply(brfss_mo[, c("bmi","htn_yes","dm_yes","dual_burden","sex","race2","smoke")],
+       function(x) sum(is.na(x)))
+
+# Save the cleaned Missouri dataset
+readr::write_csv(brfss_mo, "BRFSS2023_MO_clean.csv")
+saveRDS(brfss_mo, "BRFSS2023_MO_clean.rds")
+
+ #5. Create final analytic sample for modeling 
+
+# Analytic sample: no missing data for outcome and exposure and key covariates 
+
+BRFSS23MO_analytic <- brfss_mo %>%
+  tidyr::drop_na(dual_burden, bmi, age_cont, sex, race2, smoke)
+
+dim(BRFSS23MO_analytic)
+
+table(BRFSS23MO_analytic$dual_burden, useNA = "ifany")
+
+# % of Missouri 35+ excluded by due to missing data 
+
+1 - nrow(BRFSS23MO_analytic) / nrow(brfss_mo)
+
+
+##Save analytic dataset
+saveRDS(BRFSS23MO_analytic, file = "BRFSS2023_MO_analytic.rds")
+
+brfss23  <- readRDS("BRFSS2023.rds")              # full 2023 BRFSS
+brfss_mo <- readRDS("BRFSS2023_MO_clean.rds")     # MO 35+ recoded
+analytic <- readRDS("BRFSS2023_MO_analytic.rds")  # complete-case analytic dataset
+
+```
+
+
+## Create BMI and age categories for descriptive plots and models when needed 
+```{r}
+
+
+analytic <- analytic %>%
+  mutate(
+    # BMI categories: Normal/Underweight (<25), Overweight (25–<30), Obese (≥30)
+    bmi_cat = case_when(
+      bmi < 25 ~ "Normal/Underweight",
+      bmi >= 25 & bmi < 30 ~ "Overweight",
+      bmi >= 30 ~ "Obese"
+    ),
+    bmi_cat = factor(bmi_cat,
+                     levels = c("Normal/Underweight", "Overweight", "Obese")),
+    
+    # Age categories (if you want them for a sensitivity analysis / descriptives)
+    age_cat = case_when(
+      age_cont < 45 ~ "<45",
+      age_cont >= 45 & age_cont < 65 ~ "45–64",
+      age_cont >= 65 ~ "65+"
+    ),
+    age_cat = factor(age_cat, levels = c("<45", "45–64", "65+"))
+  )
+
+# Quick checks
+table(analytic$bmi_cat, useNA = "ifany")
+table(analytic$age_cat, useNA = "ifany")
+
+```
+
+
+
+#Flow Chart showing inclusion and excusion to obtain analytic sample 
+
+```{r}
+# 1. All BRFSS 2023 (from raw import script)
+N_all <- nrow(brfss23)   
+# 2. Missouri only
+brfss_mo_state <- brfss23 %>% filter(`_STATE` == 29L)
+N_mo_state <- nrow(brfss_mo_state)
+
+# 3. Missouri, age ≥ 35 (this is your brfss_mo)
+N_mo_35 <- nrow(brfss_mo)
+
+# 4. Complete BMI + HTN + DM
+brfss_outcome_complete <- brfss_mo %>%
+  filter(
+    !is.na(bmi),
+    !is.na(htn_yes),
+    !is.na(dm_yes)
+  )
+N_outcome <- nrow(brfss_outcome_complete)
+
+# 5. Complete covariates (age_cont, sex, race2, smoke)
+brfss_cov_complete <- brfss_outcome_complete %>%
+  filter(
+    !is.na(age_cont),
+    !is.na(sex),
+    !is.na(race2),
+    !is.na(smoke)
+  )
+N_cov <- nrow(brfss_cov_complete)
+
+# 6. Final analytic set (you stored as 'analytic')
+N_analytic <- nrow(analytic)
+
+## --- Flowchart with DiagrammeR ----
+
+figure1 <- DiagrammeR::grViz(glue::glue("
+digraph flowchart {{
+
+  graph [layout = dot, rankdir = TB]
+
+  node [fontname = Helvetica, shape = rectangle, fontsize = 12, width = 3]
+
+  node1 [label = 'BRFSS 2023 respondents\\nN = {N_all}']
+  node2 [label = 'Missouri respondents (STATE = 29)\\nN = {N_mo_state}']
+  node3 [label = 'Missouri adults ≥ 35 years\\nN = {N_mo_35}']
+  node4 [label = 'Complete BMI + hypertension + diabetes data\\nN = {N_outcome}']
+  node5 [label = 'Complete covariates\\n(age, sex, race, smoking)\\nN = {N_cov}']
+  node6 [label = 'Final analytic sample\\nN = {N_analytic}']
+
+  node1 -> node2 -> node3 -> node4 -> node5 -> node6
+}}
+"))
+
+figure1
+```
+
+
+`
+
+
+
+#Descriptive statistics (Table 1) showing the chacteristics by the Dual durden of Diabetes and Hypertension 
+
+```{r}
+#4. Descriptive statistics (Table 1)
+
+# Add labels for the outcome
+
+DB_data <- analytic %>%
+mutate(dual_burden_f = factor(dual_burden, 
+labels = c("No hypertension + diabetes", "Hypertension + diabetes")))
+
+# Add simple labels for table1 output
+
+label(DB_data$age_cont)      <- "Age (years)"
+label(DB_data$bmi)           <- "BMI (kg/m^2)"
+label(DB_data$sex)           <- "Sex"
+label(DB_data$race2)         <- "Race"
+label(DB_data$smoke)         <- "Smoking status"
+
+# Create Table 1
+
+table1(
+  ~ age_cont + bmi + sex + race2 + smoke |
+    dual_burden_f,
+  data      = DB_data,
+  overall   = "Total",
+  rowlabelhead = "Variable",
+  footnote  = "Values are mean (SD) for continuous variables and n (%) for categorical variables."
+)
+
+```
+
+
+
+## Prevalence of Dual Burden by BMI Category
+
+```{r}
+
+prev_bmi <- analytic %>%
+  group_by(bmi_cat) %>%
+  summarise(
+    prevalence = mean(dual_burden == 1, na.rm = TRUE) * 100,
+    n = n()
+  )
+
+ggplot(prev_bmi, aes(x = bmi_cat, y = prevalence, fill = bmi_cat)) +
+  geom_col(width = 0.65, color = "black") +
+  geom_text(aes(label = sprintf("%.1f%%", prevalence)),
+            vjust = -0.4, size = 5, fontface = "bold") +
+  scale_fill_brewer(palette = "Set2") +
+  labs(
+    title = "Prevalence of Dual Burden Across BMI Categories",
+    x = "BMI Category",
+    y = "Prevalence of Hypertension + Diabetes (%)"
+  ) +
+  theme_bw(base_size = 13) +
+  theme(
+    legend.position = "none",
+    plot.title      = element_text(face = "bold", size = 16),
+    axis.title      = element_text(face = "bold"),
+    axis.text.x     = element_text(face = "bold"),
+    axis.text.y     = element_text(face = "bold")
+  )
+
+```
+
+
+
+
+
+## Runing a univariable (unadjusted) logistic model for BMI as a continuous variable vs dual burden of HPT and DM 
+
+
+```{r}
+## Unadjusted logistic model: BMI -> dual_burden
+
+model_unadj <- glm( dual_burden ~ bmi, data   = analytic, family = "binomial")
+
+summary(model_unadj) # get log results
+
+#odds ratio and 95% CI
+odds.n.ends(model_unadj)  
+
+```
+
+
+##Each 1 kg/m² increase in BMI was associated with about  8% increase in the odds of dual burden (OR = 1.08, 95% CI: 1.07–1.09). The model was statistically significant (χ² = 182.1, p < 0.001)
+
+
+
+
+##Adjusted LR model 
+```{r}
+model_adj <- glm( dual_burden ~ bmi + age_cont + sex + smoke, data   = analytic,
+  family = "binomial" )
+
+summary(model_adj) 
+
+#Adjusted OR and 95% CI
+```
+##. Each 1 kg/m² increase in BMI was associated with about a 10% increase in the odds of having both hypertension and diabetes (adjusted OR ≈ 1.10 based on β = 0.096; 95% CI: ~1.09–1.12; p < 0.001).After adjusting for age, sex, and smoking status, the association between BMI and dual burden remained strong and slightly strengthened
+
+
+##Effect measure modificationby race 
+
+Linearity check for BMI (Box–Tidwell)
+
+The Box–Tidwell test evaluates whether BMI has a linear relationship with the log-odds of dual burden. A significant BMI×log(BMI) term indicates linearity is violated.
+
+```{r}
+## Assumption checks: linearity (BMI, age), multicollinearity, influence
+
+# 1. Linearity (Box–Tidwell) for BMI and age_cont
+analytic_bt <- analytic %>%
+  filter(!is.na(bmi), bmi > 0,
+         !is.na(age_cont), age_cont > 0) %>%
+  mutate(
+    bmi_log = log(bmi),
+    bmi_bt  = bmi * bmi_log,
+    age_log = log(age_cont),
+    age_bt  = age_cont * age_log
+  )
+
+model_bt <- glm(
+  dual_burden ~ bmi + bmi_bt + age_cont + age_bt + sex + race2 + smoke,
+  data   = analytic_bt,
+  family = "binomial"
+)
+
+summary(model_bt)
+# → check p-values for bmi_bt and age_bt
+#    • p < 0.05 = linearity violated for that variable
+#    • p ≥ 0.05 = linearity reasonable for that variable
+
+
+# 2. Multicollinearity (VIF) for main adjusted model
+vif(model_adj)
+# → typical rule of thumb:
+#    • VIF < 5  = no concern
+#    • 5–10     = moderate, watch
+#    • >10      = high collinearity
+
+
+# 3. Influential observations: Cook's distance plot
+plot(model_adj, which = 4, id.n = 3, col = "red")
+# → look for any points with very large Cook's D
+
+
+# 4. Extract Cook's D for each observation and apply thresholds
+model_adj_data <- broom::augment(model_adj) %>%
+  mutate(index = 1:n())
+
+# 4a. Threshold 1
+cutoff1 <- 1
+analytic_no_inf1 <- model_adj_data %>%
+  filter(.cooksd < cutoff1)
+
+nrow(analytic_no_inf1) / nrow(model_adj_data)
+# → proportion of data kept if using Cook's D < 1
+
+
+# 4b. Threshold 4/n
+cutoff2 <- 4 / nrow(model_adj_data)
+analytic_no_inf2 <- model_adj_data %>%
+  filter(.cooksd < cutoff2)
+
+nrow(analytic_no_inf2) / nrow(model_adj_data)
+# → proportion of data kept if using Cook's D < 4/n
+
+
+```
+
+##Box–Tidwell model, the interaction terms for BMI×log(BMI) and age×log(age) were both statistically significant (p < 0.05), indicating that the assumption of linearity in the log-odds scale was violated for both BMI and age.
+
+##VIFs were all close to 1 (VIF range ~1.0–1.2), suggesting no meaningful multicollinearity among variables of interest.
+
+
+## use  BMI cat due to voilation of Linearity Assumption -Run models with categorical BMI 
+
+```{r}
+
+# --- Unadjusted categorical BMI model ---
+model_bmi_cat_unadj <- glm(
+  dual_burden ~ bmi_cat,
+  data = analytic,
+  family = "binomial"
+)
+odds.n.ends(model_bmi_cat_unadj)
+
+# --- Adjusted categorical BMI model (FINAL MODEL) ---
+model_bmi_cat <- glm(
+  dual_burden ~ bmi_cat + age_cont + sex + race2 + smoke,
+  data = analytic,
+  family = "binomial"
+)
+odds.n.ends(model_bmi_cat)
+
+```
+
+##Missouri adults who were Overweight had about 1.6 times the odds of dual burden compared with adults who were Normal/Underweight (OR = 1.59, 95% CI: 1.22–2.08). Adults with Obesity had almost four times the odds of dual burden (OR = 3.86, 95% CI: 3.04–4.95) compared with Normal/Underweight adults.
+
+
+## 3. Effect Measure Modification (BMI_cat × race2)
+
+```{r}
+
+
+# Model WITHOUT interaction
+model_main <- glm(
+  dual_burden ~ bmi_cat + race2 + age_cont + sex + smoke,
+  data = analytic,
+  family = "binomial"
+)
+
+# Model WITH interaction
+model_emm <- glm(
+  dual_burden ~ bmi_cat * race2 + age_cont + sex + smoke,
+  data = analytic,
+  family = "binomial"
+)
+
+# Likelihood ratio test
+anova(model_main, model_emm, test = "LRT")
+
+# ORs for interaction model
+odds.n.ends(model_emm)
+
+```
+
+##The likelihood ratio test comparing models with and without the BMI×race interaction was not statistically significant (χ² = 2.57, df = 2; p = 0.28), indicating no strong evidence that the association between BMI category and dual burden differs by race in this sample.
+
+
+## Forest plot for adjusted model (model_bmi_cat)
+```{r}
+
+
+library(broom)
+library(ggplot2)
+library(dplyr)
+
+tidy_model <- broom::tidy(
+  model_bmi_cat,
+  exponentiate = TRUE,
+  conf.int    = TRUE
+)
+
+# Clean up labels: remove intercept, rename terms
+forest_dat <- tidy_model %>%
+  filter(term != "(Intercept)") %>%
+  mutate(
+    term_clean = case_when(
+      term == "bmi_catOverweight" ~ "Overweight vs Normal",
+      term == "bmi_catObese"      ~ "Obese vs Normal",
+      term == "age_cont"          ~ "Age (per year)",
+      term == "sexfemale"         ~ "Female vs Male",
+      term == "race2Black"        ~ "Black vs White",
+      term == "smokecurrent"      ~ "Current vs Non-current smoker",
+      TRUE                        ~ term
+    )
+  )
+
+p_forest <- ggplot(forest_dat,
+                   aes(x = term_clean, y = estimate, ymin = conf.low, ymax = conf.high)) +
+  geom_pointrange() +
+  geom_hline(yintercept = 1, linetype = 2) +
+  coord_flip() +
+  labs(
+    x = "",
+    y = "Adjusted odds ratio (95% CI)",
+    title = "Adjusted associations with dual burden of hypertension and diabetes"
+  ) +
+  theme_bw()
+
+p_forest
+
+```
+
+
+## Interaction plot: predicted probability of dual burden by BMI category and race
+```{r}
+
+
+# Use the interaction model (even if not significant)
+# If you already fit model_emm, reuse it; otherwise:
+# model_emm <- glm(
+#   dual_burden ~ bmi_cat * race2 + age_cont + sex + smoke,
+#   data   = analytic,
+#   family = "binomial"
+# )
+
+# Create a small new dataset with combinations of BMI_cat and race,
+# holding age at its mean and sex/smoke at their most common category
+age_mean <- mean(analytic$age_cont, na.rm = TRUE)
+sex_mode <- names(sort(table(analytic$sex), decreasing = TRUE))[1]
+smoke_mode <- names(sort(table(analytic$smoke), decreasing = TRUE))[1]
+
+newdat <- expand.grid(
+  bmi_cat = levels(analytic$bmi_cat),
+  race2   = levels(analytic$race2)
+) %>%
+  mutate(
+    age_cont = age_mean,
+    sex      = factor(sex_mode, levels = levels(analytic$sex)),
+    smoke    = factor(smoke_mode, levels = levels(analytic$smoke))
+  )
+
+# Predicted probabilities
+newdat$pred_prob <- predict(model_emm, newdata = newdat, type = "response")
+
+p_int <- ggplot(newdat,
+                aes(x = bmi_cat, y = pred_prob, color = race2, group = race2)) +
+  geom_point(position = position_dodge(width = 0.2)) +
+  geom_line(position = position_dodge(width = 0.2)) +
+  labs(
+    x = "BMI category",
+    y = "Predicted probability of dual burden",
+    color = "Race",
+    title = "Predicted dual burden by BMI category and race"
+  ) +
+  theme_bw()
+
+p_int
+
+```
+
+
+
+
